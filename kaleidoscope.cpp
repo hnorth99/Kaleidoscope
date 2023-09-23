@@ -266,3 +266,51 @@ int main() {
   binop_precedence['-'] = 30;
   binop_precedence['*'] = 40; // highest precedence
 }
+
+// expression
+//   ::= primary binoprhs
+//
+static std::unique_ptr<ExprAST> parse_expression() {
+  auto lhs = parse_primary();
+  if (!lhs)
+    return nullptr;
+
+  return parse_bin_ops_rhs(0, std::move(lhs));
+}
+
+// binoprhs
+//   ::= ('+' primary)*
+static std::unique_ptr<ExprAST> parse_bin_ops_rhs(int expr_prec,
+                                              std::unique_ptr<ExprAST> lhs) {
+  // If this is a binop, find its precedence.
+  while (true) {
+    int tok_prec = get_tok_precedence();
+
+    // If this is a binop that binds at least as tightly as the current binop,
+    // consume it, otherwise we are done.
+    if (tok_prec < expr_prec)
+      return lhs;
+
+    // Okay, we know this is a binop.
+    int bin_op = cur_tok;
+    get_next_token();  // consume binop
+
+    // Parse the primary expression after the binary operator.
+    auto rhs = parse_primary();
+    if (!rhs)
+      return nullptr;
+    
+    // If bin_op binds less tightly with rhs than the operator after rhs, let
+    // the pending operator take rhs as its lhs.
+    int next_prec = get_tok_precedence();
+    if (tok_prec < next_prec) {
+      rhs = parse_bin_ops_rhs(tok_prec+1, std::move(rhs));
+      if (!rhs)
+        return nullptr;
+    }
+
+    // Merge lhs/rhs.
+    lhs = std::make_unique<BinaryExprAST>(bin_op, std::move(lhs),
+                                           std::move(rhs));
+  }
+}
