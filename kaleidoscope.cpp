@@ -244,3 +244,25 @@ static std::unique_ptr<ExprAST> parse_primary() {
       return log_error("unknown token when expecting an expression");
   }
 }
+
+// BinopPrecedence - This holds the precedence for each binary operator that is
+// defined.
+// TODO add more binary operations
+static std::map<char, int> binop_precedence;
+
+// get_tok_precedence - Get the precedence of the pending binary operator token.
+static int get_tok_precedence() {
+  if (!isascii(cur_tok))
+    return -1;
+
+  int tok_prec = binop_precedence[cur_tok];
+  if (tok_prec <= 0) return -1;
+  return tok_prec;
+}
+
+int main() {
+  binop_precedence['<'] = 10;
+  binop_precedence['+'] = 20;
+  binop_precedence['-'] = 30;
+  binop_precedence['*'] = 40; // highest precedence
+}
