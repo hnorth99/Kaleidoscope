@@ -85,3 +85,70 @@ static int gettok() {
   LastChar = getchar();
   return ThisChar;
 }
+
+// Base class for all expression nodes.
+class ExprAST {
+  public:
+    virtual ~ExprAST() = default;
+};
+
+// Expression class for numeric literals.
+class NumberExprAST: public ExprAST {
+  double val_;
+
+  public:
+    NumberExprAST(double val): val_(val) {}
+};
+
+// Expression class for referencing variables.
+class VariableExprAST : public ExprAST {
+  std:: string name_;
+
+  public:
+    VariableExprAST(const std::string &name): name_(name) {}
+};
+
+// Expression class for a binary operator.
+class BinaryExprAST : public ExprAST {
+  char op_;
+  std::unique_ptr<ExprAST> lhs_, rhs_;
+  
+  public:
+    BinaryExprAST(char op, std::unique_ptr<ExprAST> lhs,
+                  std::unique_ptr<ExprAST> rhs)
+      : op_(op), lhs_(std::move(lhs)), rhs_(std::move(rhs)) {}
+};
+
+// Expression class for function calls.
+class CallExprAST : public ExprAST {
+  std::string callee_;
+  std::vector<std::unique_ptr<ExprAST>> args_;
+
+  public:
+    CallExprAST(const std::string &callee,
+                std::vector<std::unique_ptr<ExprAST>> args)
+      : callee_(callee), args_(std::move(args)) {}
+};
+
+// This class represents the "prototype" for a function (name and args)
+class PrototypeAST {
+  std::string name_;
+  std::vector<std::string> args_;
+
+public:
+  PrototypeAST(const std::string &name, std::vector<std::string> args)
+    : name_(name), args_(std::move(args)) {}
+
+  const std::string &get_name() const { return name_; }
+};
+
+// This class represents a function definition.
+class FunctionAST {
+  std::unique_ptr<PrototypeAST> proto_;
+  std::unique_ptr<ExprAST> body_;
+
+public:
+  FunctionAST(std::unique_ptr<PrototypeAST> proto,
+              std::unique_ptr<ExprAST> body)
+    : proto_(std::move(proto)), body_(std::move(body)) {}
+};
