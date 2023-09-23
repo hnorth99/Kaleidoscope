@@ -30,7 +30,7 @@ static double num_val;             // Filled in if tok_number
 
 // The implementation of a function is this single function which 
 // is repeatedly called to return the next token from standard input
-static int gettok() {
+static int get_tok() {
   static int last_char = ' ';
 
   // Skip whitespace
@@ -73,7 +73,7 @@ static int gettok() {
     while (last_char != EOF && last_char != '\n' && last_char != '\r');
     
     if (last_char != EOF)
-      return gettok();
+      return get_tok();
   }
 
   // Search for EOF
@@ -152,3 +152,15 @@ public:
               std::unique_ptr<ExprAST> body)
     : proto_(std::move(proto)), body_(std::move(body)) {}
 };
+
+// These are helper functions for error handling.
+// TODO: Come up with better error handling routine
+std::unique_ptr<ExprAST> log_error(const char *str) { // TODO: why char*?
+  fprintf(stderr, "Error: %s\n", str);
+  return nullptr;
+}
+
+std::unique_ptr<PrototypeAST> log_error_p(const char *str) {
+  log_error(str);
+  return nullptr;
+}
