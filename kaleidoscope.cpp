@@ -25,29 +25,29 @@ enum Token {
   tok_number = -5,
 };
 
-static std::string IdentifierStr; // Filled in if tok_identifier
-static double NumVal;             // Filled in if tok_number
+static std::string identifier_str; // Filled in if tok_identifier
+static double num_val;             // Filled in if tok_number
 
-// The implementation of a function is this single funciton which 
+// The implementation of a function is this single function which 
 // is repeatedly called to return the next token from standard input
 static int gettok() {
-  static int LastChar = ' ';
+  static int last_char = ' ';
 
   // Skip whitespace
-  while (isspace(LastChar))
-    LastChar = getchar();
+  while (isspace(last_char))
+    last_char = getchar();
 
   // Search for tok_def, tok_extern, and tok_identifier
-  if (isalpha(LastChar)) { // [a-zA-Z][a-zA-Z0-9]*
+  if (isalpha(last_char)) { // [a-zA-Z][a-zA-Z0-9]*
     // Build up the identifier
-    IdentifierStr = LastChar;
-    while (isalnum((LastChar = getchar())))
-      IdentifierStr += LastChar;
+    identifier_str = last_char;
+    while (isalnum((last_char = getchar())))
+      identifier_str += last_char;
 
     // Confirm that the identifier is not one of the other Tokens
-    if (IdentifierStr == "def")
+    if (identifier_str == "def")
       return tok_def;
-    if (IdentifierStr == "extern")
+    if (identifier_str == "extern")
       return tok_extern;
     
     // Return the identifier token
@@ -55,35 +55,35 @@ static int gettok() {
   }
 
   // Search for tok_number
-  if (isdigit(LastChar || LastChar == '.')) { // Number: [0-9.]+
+  if (isdigit(last_char || last_char == '.')) { // Number: [0-9.]+
     std::string NumStr;
     do {
-      NumStr += LastChar;
-      LastChar = getchar();
-    } while (isdigit(LastChar) || LastChar == '.');
+      NumStr += last_char;
+      last_char = getchar();
+    } while (isdigit(last_char) || last_char == '.');
 
-    NumVal = strtod(NumStr.c_str(), 0);
+    num_val = strtod(NumStr.c_str(), 0);
     return tok_number;
   }  // TODO: Error handling (currently, 1.23.45 will be accepted as 1.23)
 
   // Skip comments (syntax: everything ignored after # until EOL)
-  if (LastChar == '#') {
+  if (last_char == '#') {
     do
-      LastChar = getchar();
-    while (LastChar != EOF && LastChar != '\n' && LastChar != '\r');
+      last_char = getchar();
+    while (last_char != EOF && last_char != '\n' && last_char != '\r');
     
-    if (LastChar != EOF)
-      return gettok()
+    if (last_char != EOF)
+      return gettok();
   }
 
   // Search for EOF
-  if (LastChar == EOF)
+  if (last_char == EOF)
     return tok_eof;
 
   // Return non-reserved character as ascii value
-  int ThisChar = LastChar;
-  LastChar = getchar();
-  return ThisChar;
+  int this_char = last_char;
+  last_char = getchar();
+  return this_char;
 }
 
 // Base class for all expression nodes.
