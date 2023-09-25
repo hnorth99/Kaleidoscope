@@ -1,9 +1,3 @@
-// The lexer will parse through characters and returned tokenized interpretations of
-// an inputted file. 
-// The lexer passes over each character in the file and returns:
-//  An enum mapping to defined tokens
-//  A mapping to an ascii value (range 0-255) for undefined tokens
-
 #include <cctype>
 #include <cstdio>
 #include <cstdlib>
@@ -12,6 +6,16 @@
 #include <string>
 #include <utility>
 #include <vector>
+
+/////////////////////////////////////
+/// Lexer
+/////////////////////////////////////
+
+// The lexer will parse through characters and returned tokenized interpretations of
+// an inputted file. 
+// The lexer passes over each character in the file and returns:
+//  An enum mapping to defined tokens
+//  A mapping to an ascii value (range 0-255) for undefined tokens
 
 enum Token {
   tok_eof = -1,
@@ -86,6 +90,10 @@ static int get_tok() {
   return this_char;
 }
 
+/////////////////////////////////////
+/// Abstract Syntax Tree
+/////////////////////////////////////
+
 // Base class for all expression nodes.
 class ExprAST {
   public:
@@ -153,6 +161,32 @@ public:
     : proto_(std::move(proto)), body_(std::move(body)) {}
 };
 
+/////////////////////////////////////
+/// Parser
+/////////////////////////////////////
+// Provide a simple token buffer.
+//  cur_tok is the current token the parser is looking at.  
+//  getNextToken reads another token from the lexer and 
+//  updates CurTok with its results.
+static int cur_tok;
+static int get_next_token() {
+  return cur_tok = get_tok();
+}
+// BinopPrecedence - This holds the precedence for each binary operator that is
+// defined.
+// TODO add more binary operations
+static std::map<char, int> binop_precedence;
+
+// get_tok_precedence - Get the precedence of the pending binary operator token.
+static int get_tok_precedence() {
+  if (!isascii(cur_tok))
+    return -1;
+
+  int tok_prec = binop_precedence[cur_tok];
+  if (tok_prec <= 0) return -1;
+  return tok_prec;
+}
+
 // These are helper functions for error handling.
 // TODO: Come up with better error handling routine
 std::unique_ptr<ExprAST> log_error(const char *str) { // TODO: why char*?
@@ -165,14 +199,7 @@ std::unique_ptr<PrototypeAST> log_error_p(const char *str) {
   return nullptr;
 }
 
-// Provide a simple token buffer.
-//  cur_tok is the current token the parser is looking at.  
-//  getNextToken reads another token from the lexer and 
-//  updates CurTok with its results.
-static int cur_tok;
-static int get_next_token() {
-  return cur_tok = get_tok();
-}
+static std::unique_ptr<ExprAST> parse_expression();
 
 // numberexpr ::= number
 static std::unique_ptr<ExprAST> parse_number_expr() {
@@ -245,39 +272,6 @@ static std::unique_ptr<ExprAST> parse_primary() {
   }
 }
 
-// BinopPrecedence - This holds the precedence for each binary operator that is
-// defined.
-// TODO add more binary operations
-static std::map<char, int> binop_precedence;
-
-// get_tok_precedence - Get the precedence of the pending binary operator token.
-static int get_tok_precedence() {
-  if (!isascii(cur_tok))
-    return -1;
-
-  int tok_prec = binop_precedence[cur_tok];
-  if (tok_prec <= 0) return -1;
-  return tok_prec;
-}
-
-int main() {
-  binop_precedence['<'] = 10;
-  binop_precedence['+'] = 20;
-  binop_precedence['-'] = 30;
-  binop_precedence['*'] = 40; // highest precedence
-}
-
-// expression
-//   ::= primary binoprhs
-//
-static std::unique_ptr<ExprAST> parse_expression() {
-  auto lhs = parse_primary();
-  if (!lhs)
-    return nullptr;
-
-  return parse_bin_ops_rhs(0, std::move(lhs));
-}
-
 // binoprhs
 //   ::= ('+' primary)*
 static std::unique_ptr<ExprAST> parse_bin_ops_rhs(int expr_prec,
@@ -313,6 +307,17 @@ static std::unique_ptr<ExprAST> parse_bin_ops_rhs(int expr_prec,
     lhs = std::make_unique<BinaryExprAST>(bin_op, std::move(lhs),
                                            std::move(rhs));
   }
+}
+
+// expression
+//   ::= primary binoprhs
+//
+static std::unique_ptr<ExprAST> parse_expression() {
+  auto lhs = parse_primary();
+  if (!lhs)
+    return nullptr;
+
+  return parse_bin_ops_rhs(0, std::move(lhs));
 }
 
 // prototype
@@ -368,6 +373,9 @@ static std::unique_ptr<FunctionAST> parse_top_level_expr() {
   return nullptr;
 }
 
+/////////////////////////////////////
+/// Handlers (top-level parsers)
+/////////////////////////////////////
 static void handle_defintion() {
   if (parse_definition()) {
     fprintf(stderr, "Parsed a function defintion\n");
@@ -417,4 +425,14 @@ static void main_loop() {
         break;
     }
   }
+}
+
+/////////////////////////////////////
+/// Main / Driver code
+/////////////////////////////////////
+int main() {
+  binop_precedence['<'] = 10;
+  binop_precedence['+'] = 20;
+  binop_precedence['-'] = 30;
+  binop_precedence['*'] = 40; // highest precedence
 }
