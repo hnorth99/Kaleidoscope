@@ -314,3 +314,56 @@ static std::unique_ptr<ExprAST> parse_bin_ops_rhs(int expr_prec,
                                            std::move(rhs));
   }
 }
+
+// prototype
+//   ::= id '(' id* ')'
+static std::unique_ptr<PrototypeAST> parse_prototype() {
+  if (cur_tok != tok_identifier)
+    return log_error_p("Expected function name in protoype");
+
+  std::string fn_name = identifier_str;
+  get_next_token();
+
+  if (cur_tok != '(')
+    return log_error_p("Expected '(' to be in prototype");
+
+  // Read the list of argument names.
+  std::vector<std::string> arg_names;
+  while(get_next_token() == tok_identifier)
+    arg_names.push_back(identifier_str);
+
+  if (cur_tok != ')')
+    return log_error_p("Expected ')' to be in prototype");
+
+  // success.
+  get_next_token();  // consume ')'.
+
+  return std::make_unique<PrototypeAST>(fn_name, std::move(arg_names));
+}
+
+// definition ::= 'def' prototype expression
+static std::unique_ptr<FunctionAST> parse_definition() {
+  get_next_token(); // consume def.
+  auto proto = parse_prototype();
+  if (!proto) return nullptr;
+
+  if (auto e = parse_expression())
+    return std::make_unique<FunctionAST>(std::move(proto), std::move(e));
+
+  return nullptr;
+}
+
+// external ::= 'extern' prototype
+static std::unique_ptr<PrototypeAST> parse_extern() {
+  get_next_token(); // consume extern.
+  return parse_prototype();
+}
+
+// toplevelexpr ::= expression
+static std::unique_ptr<FunctionAST> parse_top_level_expr() {
+  if (auto e = parse_expression()) {
+    auto proto = std::make_unique<PrototypeAST>("", std::vector<std::string>());
+    return std::make_unique<FunctionAST>(std::move(proto), std::move(e));
+  }
+  return nullptr;
+}
