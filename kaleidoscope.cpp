@@ -435,4 +435,11 @@ int main() {
   binop_precedence['+'] = 20;
   binop_precedence['-'] = 30;
   binop_precedence['*'] = 40; // highest precedence
+
+  // Prime the first token.
+  fprintf(stderr, "ready> ");
+  get_next_token();
+
+  // Run the main interpreter loop.
+  main_loop();
 }
