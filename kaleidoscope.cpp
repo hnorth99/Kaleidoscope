@@ -32,7 +32,7 @@ enum Token {
 static std::string identifier_str; // Filled in if tok_identifier
 static double num_val;             // Filled in if tok_number
 
-// The implementation of a function is this single function which 
+// The implementation of a lexer is this single function which 
 // is repeatedly called to return the next token from standard input
 static int get_tok() {
   static int last_char = ' ';
@@ -59,14 +59,14 @@ static int get_tok() {
   }
 
   // Search for tok_number
-  if (isdigit(last_char || last_char == '.')) { // Number: [0-9.]+
-    std::string NumStr;
+  if (isdigit(last_char) || last_char == '.') { // Number: [0-9.]+
+    std::string num_str;
     do {
-      NumStr += last_char;
+      num_str += last_char;
       last_char = getchar();
     } while (isdigit(last_char) || last_char == '.');
 
-    num_val = strtod(NumStr.c_str(), 0);
+    num_val = strtod(num_str.c_str(), nullptr);
     return tok_number;
   }  // TODO: Error handling (currently, 1.23.45 will be accepted as 1.23)
 
@@ -110,7 +110,7 @@ class NumberExprAST: public ExprAST {
 
 // Expression class for referencing variables.
 class VariableExprAST : public ExprAST {
-  std:: string name_;
+  std::string name_;
 
   public:
     VariableExprAST(const std::string &name): name_(name) {}
@@ -143,11 +143,11 @@ class PrototypeAST {
   std::string name_;
   std::vector<std::string> args_;
 
-public:
-  PrototypeAST(const std::string &name, std::vector<std::string> args)
-    : name_(name), args_(std::move(args)) {}
+  public:
+    PrototypeAST(const std::string &name, std::vector<std::string> args)
+      : name_(name), args_(std::move(args)) {}
 
-  const std::string &get_name() const { return name_; }
+    const std::string &get_name() const { return name_; }
 };
 
 // This class represents a function definition.
@@ -155,10 +155,10 @@ class FunctionAST {
   std::unique_ptr<PrototypeAST> proto_;
   std::unique_ptr<ExprAST> body_;
 
-public:
-  FunctionAST(std::unique_ptr<PrototypeAST> proto,
-              std::unique_ptr<ExprAST> body)
-    : proto_(std::move(proto)), body_(std::move(body)) {}
+  public:
+    FunctionAST(std::unique_ptr<PrototypeAST> proto,
+                std::unique_ptr<ExprAST> body)
+      : proto_(std::move(proto)), body_(std::move(body)) {}
 };
 
 /////////////////////////////////////
@@ -425,6 +425,7 @@ static void main_loop() {
         break;
     }
   }
+  
 }
 
 /////////////////////////////////////
@@ -442,4 +443,5 @@ int main() {
 
   // Run the main interpreter loop.
   main_loop();
+  return 0;
 }
