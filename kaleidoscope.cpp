@@ -106,6 +106,9 @@ static int get_tok() {
 /////////////////////////////////////
 /// Abstract Syntax Tree
 /////////////////////////////////////
+
+namespace {
+
 // Base class for all expression nodes.
 class ExprAST {
   public:
@@ -179,6 +182,9 @@ class FunctionAST {
       : proto_(std::move(proto)), body_(std::move(body)) {}
     Function *codegen();
 };
+
+} // end anonymous namespace
+
 
 /////////////////////////////////////
 /// Parser
