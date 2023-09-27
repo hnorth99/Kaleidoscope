@@ -1,11 +1,24 @@
+#include "llvm/ADT/APFloat.h"
+#include "llvm/ADT/STLExtras.h"
+#include "llvm/IR/BasicBlock.h"
+#include "llvm/IR/Constants.h"
+#include "llvm/IR/DerivedTypes.h"
+#include "llvm/IR/Function.h"
+#include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/LLVMContext.h"
+#include "llvm/IR/Module.h"
+#include "llvm/IR/Type.h"
+#include "llvm/IR/Verifier.h"
+#include <algorithm>
 #include <cctype>
 #include <cstdio>
 #include <cstdlib>
 #include <map>
 #include <memory>
 #include <string>
-#include <utility>
 #include <vector>
+
+using namespace llvm;
 
 /////////////////////////////////////
 /// Lexer
@@ -93,11 +106,11 @@ static int get_tok() {
 /////////////////////////////////////
 /// Abstract Syntax Tree
 /////////////////////////////////////
-
 // Base class for all expression nodes.
 class ExprAST {
   public:
     virtual ~ExprAST() = default;
+    virtual Value *codegen() = 0;
 };
 
 // Expression class for numeric literals.
@@ -106,6 +119,7 @@ class NumberExprAST: public ExprAST {
 
   public:
     NumberExprAST(double val): val_(val) {}
+    Value *codegen() override;
 };
 
 // Expression class for referencing variables.
@@ -114,6 +128,7 @@ class VariableExprAST : public ExprAST {
 
   public:
     VariableExprAST(const std::string &name): name_(name) {}
+    Value *codegen() override;
 };
 
 // Expression class for a binary operator.
@@ -125,6 +140,7 @@ class BinaryExprAST : public ExprAST {
     BinaryExprAST(char op, std::unique_ptr<ExprAST> lhs,
                   std::unique_ptr<ExprAST> rhs)
       : op_(op), lhs_(std::move(lhs)), rhs_(std::move(rhs)) {}
+    Value *codegen() override;
 };
 
 // Expression class for function calls.
@@ -136,6 +152,7 @@ class CallExprAST : public ExprAST {
     CallExprAST(const std::string &callee,
                 std::vector<std::unique_ptr<ExprAST>> args)
       : callee_(callee), args_(std::move(args)) {}
+    Value *codegen() override;
 };
 
 // This class represents the "prototype" for a function (name and args)
@@ -148,6 +165,7 @@ class PrototypeAST {
       : name_(name), args_(std::move(args)) {}
 
     const std::string &get_name() const { return name_; }
+    Function *codegen();
 };
 
 // This class represents a function definition.
@@ -159,6 +177,7 @@ class FunctionAST {
     FunctionAST(std::unique_ptr<PrototypeAST> proto,
                 std::unique_ptr<ExprAST> body)
       : proto_(std::move(proto)), body_(std::move(body)) {}
+    Function *codegen();
 };
 
 /////////////////////////////////////
@@ -372,6 +391,147 @@ static std::unique_ptr<FunctionAST> parse_top_level_expr() {
   }
   return nullptr;
 }
+
+/////////////////////////////////////
+/// Code Gen
+/////////////////////////////////////
+// the_context objects owns lots of core llvm data structures
+static std::unique_ptr<LLVMContext> the_context;
+// the_module is an llvm construct that contains functions and
+// global variables (owns the memory for all the generated IR)
+static std::unique_ptr<Module> the_module;
+// builder helps generate llvm instructions
+static std::unique_ptr<IRBuilder<>> builder;
+// named_values keeps track of which values are defined in the
+// current scope and what their llvm representation is
+static std::map<std::string, Value *> named_values;
+
+Value *log_error_v(const char *str) {
+  log_error(str);
+  return nullptr;
+}
+
+Value *NumberExprAST::codegen() {
+  return ConstantFP::get(*the_context, APFloat(val_));
+}
+
+Value *VariableExprAST::codegen() {
+  // Look this variable up in the function.
+  Value *v = named_values[name_];
+  if (!v)
+    log_error_v("Unknown variable name");
+  return v;
+}
+
+Value *BinaryExprAST::codegen() {
+  Value *l = lhs_->codegen();
+  Value *r = rhs_->codegen();
+  if (!l || !r)
+    return nullptr;
+
+  switch (op_) {
+    case '+':
+      return builder->CreateFAdd(l, r, "addtmp");
+    case '-':
+      return builder->CreateFSub(l, r, "subtmp");
+    case '*':
+      return builder->CreateFMul(l, r, "multmp");
+    case '<':
+      // Return a one bit integer
+      l = builder->CreateFCmpULT(l, r, "cmptmp");
+      // Convert bool 0/1 to double 0.0 or 1.0
+      return builder->CreateUIToFP(l, Type::getDoubleTy(*the_context),
+                                  "booltmp");
+    default:
+      return log_error_v("invalid binary operator");
+  }
+}
+
+Value *CallExprAST::codegen() {
+  // Look up the name in the global module table.
+  Function *callee_f = the_module->getFunction(callee_);
+  if (!callee_f)
+    return log_error_v("Unknown function referenced");
+
+  // If argument mismatch error.
+  if (callee_f->arg_size() != args_.size())
+    return log_error_v("Incorrect # arguments passed");
+
+  // Codegen for all the arguments in the call
+  std::vector<Value *> args_v;
+  for (unsigned i = 0, e = args_.size(); i != e; ++i) {
+    args_v.push_back(args_[i]->codegen());
+    if (!args_v.back())
+      return nullptr;
+  }
+  return builder->CreateCall(callee_f, args_v, "calltmp");
+}
+
+Function *PrototypeAST::codegen() {
+  // Make a list of double types to match the arguments to function
+  // prototype
+  std::vector<Type*> doubles(args_.size(),
+                             Type::getDoubleTy(*the_context));
+  
+  // Specify the arguments should be all double type, the function returns
+  // a doubles type, and that the function is not varang
+  FunctionType *ft =
+    FunctionType::get(Type::getDoubleTy(*the_context), doubles, false);
+
+  // Create the IR for the function prototype and which module to link it 
+  // into (under the id name_)
+  Function *f =
+    Function::Create(ft, Function::ExternalLinkage, name_, the_module.get());
+
+  // Set names for all arguments in the function.
+  unsigned i = 0;
+  for (auto &arg : f->args())
+    arg.setName(args_[i++]);
+
+  return f;
+}
+
+Function *FunctionAST::codegen() {
+    // First, check for an existing function from a previous 'extern' declaration.
+  Function *the_function = the_module->getFunction(proto_->get_name());
+
+  // Confirm the function hasn't already been created (would be for externs)
+  if (!the_function)
+    the_function = proto_->codegen();
+
+  if (!the_function)
+    return nullptr;
+  if (!the_function->empty())
+    return (Function*)log_error_v("Function cannot be redefined.");
+
+  // Create a new basic block to start insertion into.
+  BasicBlock *bb = BasicBlock::Create(*the_context, "entry", the_function);
+  builder->SetInsertPoint(bb);
+
+  // Record the function arguments in the NamedValues map.
+  named_values.clear();
+  for (auto &arg : the_function->args())
+    named_values[std::string(arg.getName())] = &arg;
+
+  if (Value *ret_val = body_->codegen()) {
+    // Finish off the function (return code generated by expression).
+    builder->CreateRet(ret_val);
+    // Validate the generated code, checking for consistency.
+    verifyFunction(*the_function);
+    return the_function;
+  }
+
+  // Error reading body, remove function.
+  the_function->eraseFromParent();
+  return nullptr;
+}
+
+
+// TODO: There is a bug because I am not validating the signature of a function against
+// it's definition's own protoype. So, earlier extern declerations take precedence over
+// function definitions:
+// extern foo(a);     # ok, defines foo.
+// def foo(b) b;      # Error: Unknown variable name. (decl using 'a' takes precedence).
 
 /////////////////////////////////////
 /// Handlers (top-level parsers)
