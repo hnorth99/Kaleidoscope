@@ -540,11 +540,22 @@ Function *FunctionAST::codegen() {
 // def foo(b) b;      # Error: Unknown variable name. (decl using 'a' takes precedence).
 
 /////////////////////////////////////
-/// Handlers (top-level parsers)
+/// Handlers (top-level parsers) and JIT Driver
 /////////////////////////////////////
+
+static void initialize_module() {
+  the_context = std::make_unique<LLVMContext>();
+  the_module = std::make_unique<Module>("my jit", *the_context);
+  builder = std::make_unique<IRBuilder<>>(*the_context);
+}
+
 static void handle_defintion() {
-  if (parse_definition()) {
-    fprintf(stderr, "Parsed a function defintion\n");
+  if (auto fn_ast = parse_definition()) {
+    if (auto *fn_ir = fn_ast->codegen()) {
+      fprintf(stderr, "Parsed a function defintion:\n");
+      fn_ir->print(errs());
+      fprintf(stderr, "\n");
+    }
   } else {
     // skip the token for error recovery.
     get_next_token();
@@ -552,8 +563,12 @@ static void handle_defintion() {
 }
 
 static void handle_extern() {
-  if (parse_extern()) {
-    fprintf(stderr, "Parsed an extern\n");
+  if (auto proto_ast = parse_extern()) {
+    if (auto *fn_ir = proto_ast->codegen()) {
+      fprintf(stderr, "Read extern:\n");
+      fn_ir->print(errs());
+      fprintf(stderr, "\n");
+    }
   } else {
     // skip the token for error recovery.
     get_next_token();
@@ -562,8 +577,15 @@ static void handle_extern() {
 
 static void handle_top_level_expression() {
   // Evaluate a top-level expression into an anonymous function.
-  if (parse_top_level_expr()) {
-    fprintf(stderr, "Parsed a top-level expr\n");
+  if (auto fn_ast = parse_top_level_expr()) {
+    if (auto *fn_ir = fn_ast->codegen()) {
+      fprintf(stderr, "Read top-level expression:\n");
+      fn_ir->print(errs());
+      fprintf(stderr, "\n");
+
+      // Remove the anonymous expression.
+      fn_ir->eraseFromParent();
+    }
   } else {
     // Skip token for error recovery.
     get_next_token();
@@ -607,7 +629,14 @@ int main() {
   fprintf(stderr, "ready> ");
   get_next_token();
 
+  // Make the module, which holds all the code.
+  initialize_module();
+
   // Run the main interpreter loop.
   main_loop();
+
+  // Print out all of the generated code.
+  the_module->print(errs(), nullptr);
+
   return 0;
 }
