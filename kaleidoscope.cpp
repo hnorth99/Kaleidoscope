@@ -6,17 +6,26 @@
 #include "llvm/IR/Function.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/LLVMContext.h"
+#include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Type.h"
 #include "llvm/IR/Verifier.h"
+#include "llvm/Support/TargetSelect.h"
+#include "llvm/Target/TargetMachine.h"
+#include "llvm/Transforms/InstCombine/InstCombine.h"
+#include "llvm/Transforms/Scalar.h"
+#include "llvm/Transforms/Scalar/GVN.h"
 #include <algorithm>
+#include <cassert>
 #include <cctype>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <map>
 #include <memory>
 #include <string>
 #include <vector>
+
 
 using namespace llvm;
 
@@ -406,6 +415,8 @@ static std::unique_ptr<LLVMContext> the_context;
 // the_module is an llvm construct that contains functions and
 // global variables (owns the memory for all the generated IR)
 static std::unique_ptr<Module> the_module;
+// the_fpm providers an interface to add optimizations
+static std::unique_ptr<legacy::FunctionPassManager> the_fpm;
 // builder helps generate llvm instructions
 static std::unique_ptr<IRBuilder<>> builder;
 // named_values keeps track of which values are defined in the
@@ -524,6 +535,8 @@ Function *FunctionAST::codegen() {
     builder->CreateRet(ret_val);
     // Validate the generated code, checking for consistency.
     verifyFunction(*the_function);
+    // Optimize function
+    the_fpm->run(*the_function);
     return the_function;
   }
 
@@ -543,10 +556,24 @@ Function *FunctionAST::codegen() {
 /// Handlers (top-level parsers) and JIT Driver
 /////////////////////////////////////
 
-static void initialize_module() {
+void initialize_module_and_pass_manager(void) {
   the_context = std::make_unique<LLVMContext>();
-  the_module = std::make_unique<Module>("my jit", *the_context);
+  the_module = std::make_unique<Module>("my cool jit", *the_context);
   builder = std::make_unique<IRBuilder<>>(*the_context);
+
+  // Create a new pass manager attached to it.
+  the_fpm = std::make_unique<legacy::FunctionPassManager>(the_module.get());
+
+  // Do simple "peephole" optimizations and bit-twiddling optzns.
+  the_fpm->add(createInstructionCombiningPass());
+  // Reassociate expressions.
+  the_fpm->add(createReassociatePass());
+  // Eliminate Common SubExpressions.
+  the_fpm->add(createGVNPass());
+  // Simplify the control flow graph (deleting unreachable blocks, etc).
+  the_fpm->add(createCFGSimplificationPass());
+
+  the_fpm->doInitialization();
 }
 
 static void handle_defintion() {
@@ -630,7 +657,7 @@ int main() {
   get_next_token();
 
   // Make the module, which holds all the code.
-  initialize_module();
+  initialize_module_and_pass_manager();
 
   // Run the main interpreter loop.
   main_loop();
