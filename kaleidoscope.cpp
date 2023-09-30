@@ -402,7 +402,7 @@ static std::unique_ptr<PrototypeAST> parse_extern() {
 // toplevelexpr ::= expression
 static std::unique_ptr<FunctionAST> parse_top_level_expr() {
   if (auto e = parse_expression()) {
-    auto proto = std::make_unique<PrototypeAST>("", std::vector<std::string>());
+    auto proto = std::make_unique<PrototypeAST>("__anon_expr", std::vector<std::string>());
     return std::make_unique<FunctionAST>(std::move(proto), std::move(e));
   }
   return nullptr;
