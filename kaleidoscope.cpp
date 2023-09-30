@@ -1,3 +1,4 @@
+#include "include/kaleidoscopeJIT.h"
 #include "llvm/ADT/APFloat.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/IR/BasicBlock.h"
@@ -26,8 +27,8 @@
 #include <string>
 #include <vector>
 
-
 using namespace llvm;
+using namespace llvm::orc;
 
 /////////////////////////////////////
 /// Lexer
@@ -417,11 +418,14 @@ static std::unique_ptr<LLVMContext> the_context;
 static std::unique_ptr<Module> the_module;
 // the_fpm providers an interface to add optimizations
 static std::unique_ptr<legacy::FunctionPassManager> the_fpm;
+static std::unique_ptr<KaleidoscopeJIT> the_jit;
+static std::map<std::string, std::unique_ptr<PrototypeAST>> function_protos;
 // builder helps generate llvm instructions
 static std::unique_ptr<IRBuilder<>> builder;
 // named_values keeps track of which values are defined in the
 // current scope and what their llvm representation is
 static std::map<std::string, Value *> named_values;
+static ExitOnError ExitOnErr;
 
 Value *log_error_v(const char *str) {
   log_error(str);
@@ -464,9 +468,24 @@ Value *BinaryExprAST::codegen() {
   }
 }
 
+Function *get_function(std::string name) {
+  // First, see if the function has already been added to the current module.
+  if (auto *f = the_module->getFunction(name))
+    return f;
+
+  // If not, check whether we can codegen the declaration from some existing
+  // prototype.
+  auto fi = function_protos.find(name);
+  if (fi != function_protos.end())
+    return fi->second->codegen();
+
+  // If no existing prototype exists, return null.
+  return nullptr;
+}
+
 Value *CallExprAST::codegen() {
   // Look up the name in the global module table.
-  Function *callee_f = the_module->getFunction(callee_);
+  Function *callee_f = get_function(callee_);
   if (!callee_f)
     return log_error_v("Unknown function referenced");
 
@@ -509,6 +528,14 @@ Function *PrototypeAST::codegen() {
 }
 
 Function *FunctionAST::codegen() {
+  // Transfer ownership of the prototype to the FunctionProtos map, but keep a
+  // reference to it for use below.
+  auto &p = *proto_;
+  function_protos[proto_->get_name()] = std::move(proto_); // TODO: understand why this is safe 
+  Function *TheFunction = get_function(p.get_name());
+  if (!TheFunction)
+    return nullptr;
+
     // First, check for an existing function from a previous 'extern' declaration.
   Function *the_function = the_module->getFunction(proto_->get_name());
 
@@ -559,6 +586,7 @@ Function *FunctionAST::codegen() {
 void initialize_module_and_pass_manager(void) {
   the_context = std::make_unique<LLVMContext>();
   the_module = std::make_unique<Module>("my cool jit", *the_context);
+  the_module->setDataLayout(the_jit->getDataLayout());
   builder = std::make_unique<IRBuilder<>>(*the_context);
 
   // Create a new pass manager attached to it.
@@ -582,6 +610,9 @@ static void handle_defintion() {
       fprintf(stderr, "Parsed a function defintion:\n");
       fn_ir->print(errs());
       fprintf(stderr, "\n");
+      ExitOnErr(the_jit->addModule(
+          ThreadSafeModule(std::move(the_module), std::move(the_context))));
+      initialize_module_and_pass_manager();
     }
   } else {
     // skip the token for error recovery.
@@ -595,6 +626,7 @@ static void handle_extern() {
       fprintf(stderr, "Read extern:\n");
       fn_ir->print(errs());
       fprintf(stderr, "\n");
+      function_protos[proto_ast->get_name()] = std::move(proto_ast);
     }
   } else {
     // skip the token for error recovery.
@@ -605,13 +637,28 @@ static void handle_extern() {
 static void handle_top_level_expression() {
   // Evaluate a top-level expression into an anonymous function.
   if (auto fn_ast = parse_top_level_expr()) {
-    if (auto *fn_ir = fn_ast->codegen()) {
-      fprintf(stderr, "Read top-level expression:\n");
-      fn_ir->print(errs());
-      fprintf(stderr, "\n");
+    if (fn_ast->codegen()) {
+      // Create a ResourceTracker to track JIT'd memory allocated to our
+      // anonymous expression -- that way we can free it after executing.
+      auto rt = the_jit->getMainJITDylib().createResourceTracker();
 
-      // Remove the anonymous expression.
-      fn_ir->eraseFromParent();
+      auto tsm = ThreadSafeModule(std::move(the_module), std::move(the_context));
+      ExitOnErr(the_jit->addModule(std::move(tsm), rt));
+      // Once the module has been added to the JIT it can no longer be modified, so 
+      // open a new module to hold subsequent code
+      initialize_module_and_pass_manager();
+
+      // Search the JIT for the __anon_expr symbol (top level expression).
+      auto ExprSymbol = ExitOnErr(the_jit->lookup("__anon_expr"));
+
+      // Get the symbol's address and cast it to the right type (takes no
+      // arguments, returns a double) so we can call it as a native function.
+      double (*fp)() = ExprSymbol.getAddress().toPtr<double (*)()>();
+      fprintf(stderr, "Evaluated to %f\n", fp());
+
+      // Delete the anonymous expression module from the JIT (since this doesn't 
+      // support re-evaluation).
+      ExitOnErr(rt->remove());
     }
   } else {
     // Skip token for error recovery.
@@ -647,6 +694,10 @@ static void main_loop() {
 /// Main / Driver code
 /////////////////////////////////////
 int main() {
+  InitializeNativeTarget();
+  InitializeNativeTargetAsmPrinter();
+  InitializeNativeTargetAsmParser();
+
   binop_precedence['<'] = 10;
   binop_precedence['+'] = 20;
   binop_precedence['-'] = 30;
@@ -655,6 +706,8 @@ int main() {
   // Prime the first token.
   fprintf(stderr, "ready> ");
   get_next_token();
+
+  the_jit = ExitOnErr(KaleidoscopeJIT::Create());
 
   // Make the module, which holds all the code.
   initialize_module_and_pass_manager();
