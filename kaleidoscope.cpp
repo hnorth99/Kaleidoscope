@@ -26,6 +26,7 @@
 #include <memory>
 #include <string>
 #include <vector>
+#include <iostream>
 
 using namespace llvm;
 using namespace llvm::orc;
@@ -532,21 +533,9 @@ Function *FunctionAST::codegen() {
   // reference to it for use below.
   auto &p = *proto_;
   function_protos[proto_->get_name()] = std::move(proto_); // TODO: understand why this is safe 
-  Function *TheFunction = get_function(p.get_name());
-  if (!TheFunction)
-    return nullptr;
-
-    // First, check for an existing function from a previous 'extern' declaration.
-  Function *the_function = the_module->getFunction(proto_->get_name());
-
-  // Confirm the function hasn't already been created (would be for externs)
-  if (!the_function)
-    the_function = proto_->codegen();
-
+  Function *the_function = get_function(p.get_name());
   if (!the_function)
     return nullptr;
-  if (!the_function->empty())
-    return (Function*)log_error_v("Function cannot be redefined.");
 
   // Create a new basic block to start insertion into.
   BasicBlock *bb = BasicBlock::Create(*the_context, "entry", the_function);
