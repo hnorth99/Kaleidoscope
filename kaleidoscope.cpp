@@ -6,6 +6,7 @@
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/Instructions.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/Module.h"
@@ -26,7 +27,6 @@
 #include <memory>
 #include <string>
 #include <vector>
-#include <iostream>
 
 using namespace llvm;
 using namespace llvm::orc;
@@ -51,6 +51,11 @@ enum Token {
   // primary
   tok_identifier = -4,
   tok_number = -5,
+
+  // control flow
+  tok_if = -6,
+  tok_then = -7,
+  tok_else = -8,
 };
 
 static std::string identifier_str; // Filled in if tok_identifier
@@ -77,6 +82,12 @@ static int get_tok() {
       return tok_def;
     if (identifier_str == "extern")
       return tok_extern;
+    if (identifier_str == "if")
+      return tok_if;
+    if (identifier_str == "then")
+      return tok_then;
+    if (identifier_str == "else")
+      return tok_else;
     
     // Return the identifier token
     return tok_identifier;
@@ -154,6 +165,18 @@ class BinaryExprAST : public ExprAST {
     BinaryExprAST(char op, std::unique_ptr<ExprAST> lhs,
                   std::unique_ptr<ExprAST> rhs)
       : op_(op), lhs_(std::move(lhs)), rhs_(std::move(rhs)) {}
+    Value *codegen() override;
+};
+
+// Expression class for an if else workflow.
+class IfExprAST : public ExprAST {
+  std::unique_ptr<ExprAST> cond_, then_, else_;
+  
+  public:
+    IfExprAST(std::unique_ptr<ExprAST> cond,
+              std::unique_ptr<ExprAST> then,
+              std::unique_ptr<ExprAST> elsE)
+      : cond_(std::move(cond)), then_(std::move(then)), else_(std::move(elsE)) {}
     Value *codegen() override;
 };
 
@@ -291,6 +314,34 @@ static std::unique_ptr<ExprAST> parse_identifier_expr() {
   return std::make_unique<CallExprAST>(id_name, std::move(args));
 }
 
+// ifexpr ::= 'if' expression 'then' expression 'else' expression
+static std::unique_ptr<ExprAST> parse_if_expr() {
+  get_next_token();  // consume if.
+
+  auto cond = parse_expression();
+  if (!cond)
+    return nullptr;
+
+  if (cur_tok != tok_then)
+    return log_error("expected then");
+  get_next_token(); // consume then.
+
+  auto then = parse_expression();
+  if (!then)
+    return nullptr;
+
+  if (cur_tok != tok_else)
+    return log_error("expected else");
+  get_next_token(); // consume else.
+
+  auto elsE = parse_expression();
+  if (!elsE)
+    return nullptr;
+  
+  return std::make_unique<IfExprAST>(std::move(cond), std::move(then), 
+                                      std::move(elsE));
+}
+
 // primary
 //   ::= identifierexpr
 //   ::= numberexpr
@@ -301,6 +352,8 @@ static std::unique_ptr<ExprAST> parse_primary() {
       return parse_identifier_expr();
     case tok_number:
       return parse_number_expr();
+    case tok_if:
+      return parse_if_expr();
     case '(':
       return parse_paren_expr();
     default:
@@ -502,6 +555,54 @@ Value *CallExprAST::codegen() {
       return nullptr;
   }
   return builder->CreateCall(callee_f, args_v, "calltmp");
+}
+
+Value *IfExprAST::codegen() {
+  Value *cond_v = cond_->codegen();
+  if (!cond_v)
+    return nullptr;
+
+  // Convert condition to a bool
+  cond_v = builder->CreateFCmpONE(
+    cond_v, ConstantFP::get(*the_context, APFloat(0.0)), "ifcond");
+
+  // Ask the builder for the parent of the current block 
+  Function *the_function = builder->GetInsertBlock()->getParent();
+
+  // Start inserting block for if and else cases... follow with then block
+  BasicBlock *then_bb = BasicBlock::Create(*the_context, "then", the_function);
+  BasicBlock *else_bb = BasicBlock::Create(*the_context, "else");
+  BasicBlock *merge_bb = BasicBlock::Create(*the_context, "ifcont");
+  builder->CreateCondBr(cond_v, then_bb, else_bb);
+
+  // Emit then value
+  builder->SetInsertPoint(then_bb);
+  Value *then_v = then_->codegen();
+  if (!then_v)
+    return nullptr;
+  builder->CreateBr(merge_bb);
+  // Codegen of 'Then' can change the current block, update ThenBB for the PHI.
+  then_bb = builder->GetInsertBlock();
+
+  // Emit then value
+  the_function->insert(the_function->end(), else_bb);
+  builder->SetInsertPoint(else_bb);
+  Value *else_v = else_->codegen();
+  if (!else_v)
+    return nullptr;
+  builder->CreateBr(merge_bb);
+  // Codegen of 'Then' can change the current block, update ThenBB for the PHI.
+  else_bb = builder->GetInsertBlock();
+
+  // Emit merge block.
+  the_function->insert(the_function->end(), merge_bb);
+  builder->SetInsertPoint(merge_bb);
+  PHINode *pn =
+    builder->CreatePHI(Type::getDoubleTy(*the_context), 2, "iftmp");
+  pn->addIncoming(then_v, then_bb);
+  pn->addIncoming(else_v, else_bb);
+
+  return pn;
 }
 
 Function *PrototypeAST::codegen() {
