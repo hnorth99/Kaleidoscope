@@ -64,6 +64,7 @@ enum Token {
   // operators
   tok_binary = -11,
   tok_unary = -12,
+  tok_var = -13,
 };
 
 static std::string IdentifierStr; // Filled in if tok_identifier
@@ -104,6 +105,8 @@ static int gettok() {
       return tok_unary;
     if (IdentifierStr == "binary")
       return tok_binary;
+    if (IdentifierStr == "var")
+      return tok_var;
 
     // Return the identifier token
     return tok_identifier;
@@ -182,6 +185,18 @@ public:
   BinaryExprAST(char Op, std::unique_ptr<ExprAST> LHS,
                 std::unique_ptr<ExprAST> RHS)
       : Op(Op), LHS(std::move(LHS)), RHS(std::move(RHS)) {}
+  Value *codegen() override;
+};
+
+// VarExprAST - Expression class for var/in
+class VarExprAST : public ExprAST {
+  std::vector<std::pair<std::string, std::unique_ptr<ExprAST>>> VarNames;
+  std::unique_ptr<ExprAST> Body;
+
+public:
+  VarExprAST(std::vector<std::pair<std::string, std::unique_ptr<ExprAST>>> VarNames, 
+              std::unique_ptr<ExprAST> Body)
+    : VarNames(std::move(VarNames)), Body(std::move(Body)) {}
   Value *codegen() override;
 };
 
@@ -375,6 +390,46 @@ static std::unique_ptr<ExprAST> ParseIdentifierExpr() {
   return std::make_unique<CallExprAST>(IdName, std::move(Args));
 }
 
+static std::unique_ptr<ExprAST> ParseVarExpr() {
+  getNextToken(); // consume the var
+  std::vector<std::pair<std::string, std::unique_ptr<ExprAST>>> VarNames;
+  // At least one variable name is required 
+  if (CurTok != tok_identifier)
+    return LogError("expected identifier after var");
+
+  while (true) {
+    std::string Name = IdentifierStr;
+    getNextToken();
+
+    // read optional initializer
+    std::unique_ptr<ExprAST> Init;
+    if (CurTok == '=') {
+      getNextToken();
+      Init = ParseExpression();
+      if (!Init) return nullptr;
+    }
+    VarNames.push_back(std::make_pair(Name, std::move(Init)));
+
+    // End of var list
+    if (CurTok != ',') break;
+    getNextToken(); // consume ','
+
+    if (CurTok != tok_identifier)
+      return LogError("expected identifier list after var");
+  }
+
+  // At this point we have an 'in'
+  if (CurTok != tok_in)
+    return LogError("expected'in' keyword after 'var'");
+  getNextToken();
+
+  auto Body = ParseExpression();
+  if (!Body)
+    return nullptr;
+
+  return std::make_unique<VarExprAST>(std::move(VarNames), std::move(Body));
+}
+
 /// ifexpr ::= 'if' expression 'then' expression 'else' expression
 static std::unique_ptr<ExprAST> ParseIfExpr() {
   getNextToken(); // eat the if.
@@ -471,6 +526,8 @@ static std::unique_ptr<ExprAST> ParsePrimary() {
     return ParseIfExpr();
   case tok_for:
     return ParseForExpr();
+  case tok_var:
+    return ParseVarExpr();
   }
 }
 
@@ -674,7 +731,7 @@ Function *getFunction(std::string Name) {
 // CreateEntryBlockAlloca - Create an alloca instruction in the entry block
 // of the function. This is used for mutable variables.
 static AllocaInst* CreateEntryBlockAlloca(Function* TheFunction, 
-                                        const std::string &VarName) {
+                                        StringRef &VarName) {
   IRBuilder<> TmpB(&TheFunction->getEntryBlock(),
                   TheFunction->getEntryBlock().begin());
   return TmpB.CreateAlloca(Type::getDoubleTy(*TheContext), nullptr,
@@ -775,6 +832,50 @@ Value *CallExprAST::codegen() {
   }
 
   return Builder->CreateCall(CalleeF, ArgsV, "calltmp");
+}
+
+Value* VarExprAST::codegen() {
+  std::vector<AllocaInst*> OldBindings;
+  Function* TheFunction = Builder->GetInsertBlock()->getParent();
+
+  // Register all the variables and emit their initializer
+  for (unsigned i = 0, e = VarNames.size(); i != e; ++i) {
+    const std::string &VarName = VarNames[i].first;
+    ExprAST *Init = VarNames[i].second.get();
+
+    // Emit the initializer before adding the variable to scope,
+    // this preventsthe initalizer from referencing the variable
+    // itself, and permits stuff like this:
+    // var = 1 in 
+    //   var a = a ... refers to outer 'a'
+    Value *InitVal;
+    if (Init) {
+      InitVal = Init->codegen();
+      if (!InitVal)
+        return nullptr;
+    } else {
+      InitVal = ConstantFP::get(*TheContext, APFloat(0.0));
+    }
+    AllocaInst *Alloca = CreateEntryBlockAlloca(TheFunction, VarName);
+    Builder->CreateStore(InitVal, Alloca);
+
+    // Remember the old variable binding so thatwwecan restore the binding
+    // when we recurse
+    OldBindings.push_back(NamedValues[VarName]);
+
+    // Rememember this binding 
+    NamedValues[VarName] = Alloca;
+  }
+
+  Value *BodyVal = Body->codegen();
+  if (!BodyVal)
+    return nullptr;
+  
+  // Pop all our variables from scope
+  for (unsigned i = 0, e = VarNames.size(); i != e; ++i)
+    NamedValues[VarNames[i].first] = OldBindings[i];
+  // Return the body computation
+  return BodyVal;
 }
 
 Value *IfExprAST::codegen() {
