@@ -1,3 +1,4 @@
 .DS_Store
 build**
+toy/build**
 toy_jit/build**
