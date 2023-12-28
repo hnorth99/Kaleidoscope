@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+mkdir -p build
+cp fib.ks build
+cd build
+clang++ -g ./../kaleidoscope.cpp `llvm-config --cxxflags --ldflags --system-libs --libs core orcjit native` -O3 -o kaleidoscope
+./kaleidoscope < fib.ks
