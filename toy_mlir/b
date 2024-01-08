@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+mkdir -p build
+cd build
+clang++ -g ./../toyc.cpp ./../parser/AST.cpp -I ./../include/ `llvm-config --cxxflags --ldflags --system-libs --libs all` -O3 -o toyc
+./toyc ./../test/Ch1/ast.toy -emit=ast
