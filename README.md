@@ -16,3 +16,5 @@ This project leverages a jit compiler to create a command line / prompt interfac
 This project shows how llvm can also be used to generate debug information. By running `bash b`:
 1. The clang compiler is used to transform kaleidoscope.cpp into a kaleidoscope debugger
 2. Then, we pass the fib.ks file into the kaleidoscope debugger which emits thorough information regarding our .ks file
+### toy_mlir
+This project shows how llvm can be integrated with mlir based on the official mlir toy tutorial.
